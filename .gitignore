@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+data/
+.pytest_cache/
+.build-tools/
+.venv/
+build/
+*.spec
+!Project Hearth TV.spec
+*.log
+dist/
+release/
