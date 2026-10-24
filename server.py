@@ -188,7 +188,7 @@ def vlc_executable() -> str | None:
         if candidate and Path(candidate).is_file(): return str(Path(candidate))
     return None
 
-def open_in_vlc(url: str, title: str = "Project Hearth", allow_local_file: bool = False) -> None:
+def open_in_vlc(url: str, title: str = "Project Hearth", allow_local_file: bool = False, start_time: float = 0) -> None:
     executable = vlc_executable()
     if not executable:
         raise RuntimeError("VLC is required for playback. Install VLC Media Player, then try Play again.")
@@ -197,7 +197,10 @@ def open_in_vlc(url: str, title: str = "Project Hearth", allow_local_file: bool 
     is_local = allow_local_file and parsed.scheme == "file"
     if not (is_remote or is_local):
         raise ValueError("VLC playback accepts HTTP or HTTPS streams and indexed library files only.")
-    subprocess.Popen([executable, "--no-video-title-show", "--meta-title", title[:200], url], close_fds=True)
+    command = [executable, "--no-video-title-show", "--meta-title", title[:200]]
+    if start_time > 5: command.append(f"--start-time={int(start_time)}")
+    command.append(url)
+    subprocess.Popen(command, close_fds=True)
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Hearth/0.1"
@@ -226,6 +229,10 @@ class Handler(BaseHTTPRequestHandler):
             if not self.authorized(): self.send_json({"error":"Sign in to your local Hearth account."},401); return
             if path == "/api/discovery/settings":
                 self.send_json(discovery.settings()); return
+            if path == "/api/discovery/home":
+                try: self.send_json(discovery.tmdb_home())
+                except Exception as e: self.send_json({"error": str(e)}, 400)
+                return
             if path == "/api/discovery/search":
                 query = urllib.parse.parse_qs(u.query)
                 try: self.send_json({"items": discovery.tmdb_search(query.get("q", [""])[0], query.get("type", ["movie"])[0])})
@@ -248,7 +255,7 @@ class Handler(BaseHTTPRequestHandler):
             with db() as c:
                 if path=="/api/overview":
                     libs=[dict(r) for r in c.execute("SELECT l.*,count(m.id) AS item_count FROM libraries l LEFT JOIN media m ON m.library_id=l.id GROUP BY l.id ORDER BY l.id")]
-                    items=[dict(r) for r in c.execute("SELECT m.*,coalesce(p.position,0) AS position,coalesce(p.duration,m.duration) AS progress_duration FROM media m LEFT JOIN progress p ON p.media_id=m.id ORDER BY m.title COLLATE NOCASE LIMIT 500")]
+                    items=[dict(r) for r in c.execute("SELECT m.*,coalesce(p.position,0) AS position,coalesce(p.duration,m.duration) AS progress_duration,coalesce(p.updated_at,'') AS updated_at FROM media m LEFT JOIN progress p ON p.media_id=m.id ORDER BY m.title COLLATE NOCASE LIMIT 500")]
                     prefs={r["key"]:r["value"] for r in c.execute("SELECT * FROM preferences")}
                     self.send_json({"libraries":libs,"items":items,"preferences":prefs}); return
                 if path.startswith("/api/scan/"):
@@ -328,12 +335,16 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 media_id = data.get("media_id")
                 if media_id is not None:
-                    with db() as c: row = c.execute("SELECT path,title FROM media WHERE id=?", (int(media_id),)).fetchone()
+                    with db() as c: row = c.execute("SELECT m.path,m.title,coalesce(p.position,0) AS position,coalesce(p.duration,m.duration) AS duration FROM media m LEFT JOIN progress p ON p.media_id=m.id WHERE m.id=?", (int(media_id),)).fetchone()
                     if not row: raise ValueError("This library item is no longer available.")
                     media_path = Path(row["path"]).resolve(strict=True)
                     with db() as c:
                         if not c.execute("SELECT 1 FROM media WHERE path=?", (str(media_path),)).fetchone(): raise ValueError("This file is not in a scanned library.")
-                    open_in_vlc(media_path.as_uri(), row["title"], allow_local_file=True)
+                    resume_at = float(row["position"] or 0)
+                    if row["duration"] and resume_at >= float(row["duration"]) - 90: resume_at = 0
+                    open_in_vlc(media_path.as_uri(), row["title"], allow_local_file=True, start_time=resume_at)
+                    with db() as c:
+                        c.execute("INSERT INTO progress(media_id,position,duration,updated_at) VALUES(?,?,?,?) ON CONFLICT(media_id) DO UPDATE SET updated_at=excluded.updated_at", (int(media_id),resume_at,row["duration"],now()))
                 else:
                     open_in_vlc(str(data.get("url", "")), str(data.get("title", "Project Hearth")))
                 self.send_json({"opened": True})
@@ -400,7 +411,7 @@ class Handler(BaseHTTPRequestHandler):
                 token = torbox.load_token()
                 if not token: raise RuntimeError("Connect your TorBox account in the desktop app before playing torrent streams.")
                 url = data.get("url")
-                if isinstance(url, str) and url.startswith("https://"):
+                if isinstance(url, str) and url.startswith(("https://", "http://")):
                     self.send_json({"url":url}); return
                 info_hash = data.get("infoHash") or data.get("hash")
                 if not info_hash: raise RuntimeError("This add-on result does not have a supported playable URL or torrent hash.")

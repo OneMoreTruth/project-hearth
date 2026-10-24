@@ -93,6 +93,29 @@ def tmdb_search(query: str, kind: str = "movie") -> list[dict]:
     return items
 
 
+def tmdb_home() -> dict:
+    """Fetch browse rows used by the streaming-first home screen."""
+    params = urllib.parse.urlencode({"api_key": _tmdb_key(), "language": "en-GB", "region": "GB"})
+    def list_items(path: str) -> list[dict]:
+        result = _json(f"{TMDB}/{path}?{params}")
+        items = []
+        for entry in result.get("results", []):
+            if path == "trending/all/week" and entry.get("media_type") not in ("movie", "tv"):
+                continue
+            kind = "tv" if path.startswith("tv/") or entry.get("media_type") == "tv" else "movie"
+            items.append({
+                "id": str(entry.get("id", "")), "type": kind,
+                "title": entry.get("title") or entry.get("name") or "Untitled",
+                "year": (entry.get("release_date") or entry.get("first_air_date") or "")[:4],
+                "overview": entry.get("overview") or "", "poster": entry.get("poster_path"),
+                "backdrop": entry.get("backdrop_path"), "rating": entry.get("vote_average"),
+            })
+        return items
+    trending = [item for item in list_items("trending/all/week") if item["type"] in ("movie", "tv")]
+    new = list_items("movie/now_playing") + list_items("tv/on_the_air")
+    return {"suggested": trending, "new": new[:20]}
+
+
 def tmdb_tv_details(tmdb_id: str, season: int | None = None) -> dict:
     params = urllib.parse.urlencode({"api_key": _tmdb_key(), "language": "en-GB"})
     if season is None:
@@ -163,11 +186,13 @@ def remove_addon(manifest_url: str) -> None:
 
 def _endpoint(manifest_url: str, manifest: dict, resource: str, media_type: str, media_id: str) -> str | None:
     resources = manifest.get("resources", [])
-    supported = any(
-        (r == resource) or (isinstance(r, dict) and r.get("name") == resource and (not r.get("types") or media_type in r["types"]))
-        for r in resources
-    ) if isinstance(resources, list) else False
-    if not supported or (manifest.get("types") and media_type not in manifest["types"]):
+    resource_entries = [r for r in resources if r == resource or (isinstance(r, dict) and r.get("name") == resource and (not r.get("types") or media_type in r["types"]))] if isinstance(resources, list) else []
+    if not resource_entries or (manifest.get("types") and media_type not in manifest["types"]):
+        return None
+    prefixes = manifest.get("idPrefixes") or []
+    for entry in resource_entries:
+        if isinstance(entry, dict): prefixes = entry.get("idPrefixes") or prefixes
+    if prefixes and not any(str(media_id).startswith(str(prefix)) for prefix in prefixes):
         return None
     base = manifest.get("id", "")
     parsed = urllib.parse.urlsplit(manifest_url)
@@ -206,7 +231,8 @@ def title_sources(tmdb_id: str, media_type: str, imdb_id: str | None = None, sea
     if not imdb_id:
         try:
             params = urllib.parse.urlencode({"api_key": _tmdb_key()})
-            external = _json(f"{TMDB}/{media_type}/{urllib.parse.quote(str(tmdb_id), safe='')}/external_ids?{params}")
+            tmdb_kind = "tv" if is_series else "movie"
+            external = _json(f"{TMDB}/{tmdb_kind}/{urllib.parse.quote(str(tmdb_id), safe='')}/external_ids?{params}")
             imdb_id = external.get("imdb_id")
         except Exception:
             pass
@@ -217,7 +243,16 @@ def title_sources(tmdb_id: str, media_type: str, imdb_id: str | None = None, sea
             manifest = _addon_manifest(addon["manifest"])
             if is_series and (season is None or episode is None):
                 continue
-            stream_id = f"{imdb_id or source_id}:{int(season)}:{int(episode)}" if is_series else (imdb_id or source_id)
+            prefixes = manifest.get("idPrefixes") or []
+            resources = manifest.get("resources", [])
+            for resource in resources if isinstance(resources, list) else []:
+                if isinstance(resource, dict) and resource.get("name") == "stream" and (not resource.get("types") or media_type in resource["types"]):
+                    prefixes = resource.get("idPrefixes") or prefixes
+            candidates = [candidate for candidate in (imdb_id, source_id) if candidate]
+            base_id = next((candidate for candidate in candidates if not prefixes or any(candidate.startswith(str(prefix)) for prefix in prefixes)), None)
+            if not base_id:
+                continue
+            stream_id = f"{base_id}:{int(season)}:{int(episode)}" if is_series else base_id
             path = _endpoint(addon["manifest"], manifest, "stream", media_type, stream_id)
             if not path:
                 continue

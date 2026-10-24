@@ -1,6 +1,6 @@
 # Project Hearth
 
-Project Hearth is a Windows media discovery and local library app. It includes TMDB-powered movie and TV search, TorBox source lookup, Stremio-compatible add-on support, episode-level TV stream lookup, and an in-app player.
+Project Hearth is a Windows media discovery and local library app. Its streaming-first home screen includes suggested titles, new releases, and a continue-watching row, with a dark Netflix-inspired theme and frosted glass panels. Search movies and TV with TMDB, look up episode streams through TorBox and Stremio-compatible add-ons, then open playback in VLC.
 
 ## Download and install (Windows)
 
@@ -15,6 +15,7 @@ The app starts its own local host on an available loopback port and opens its in
 ## What the app does
 
 - Searches titles and artwork with your TMDB API key.
+- Shows trending suggestions, new releases, and recently opened library items on Home; personal folders and scanned media live in Library.
 - Looks up movie and episode streams via configured TorBox and Stremio add-ons.
 - Saves local libraries, settings, watch progress, and sign-in state on this PC.
 - Uses Windows DPAPI to protect saved provider keys and add-on URLs for the current Windows user.
