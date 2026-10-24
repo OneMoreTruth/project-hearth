@@ -4,12 +4,13 @@ Project Hearth is a Windows media discovery and local library app. It includes T
 
 ## Download and install (Windows)
 
-1. Open the repository's **Releases** page and download `Project-Hearth-Windows.zip` from the latest release.
-2. In File Explorer, right-click the ZIP and choose **Extract All…**.
-3. Open the extracted folder and double-click `Run Hearth.cmd` or `Project Hearth TV.exe`.
-4. On first launch, create a local username and password. In **Settings**, add your TMDB key and any TorBox, Debridio, or Stremio add-on connections you use.
+1. Install [VLC media player for Windows](https://www.videolan.org/vlc/download-windows.html). Project Hearth uses VLC to play local files and streams.
+2. Open the repository's **Releases** page and download `Project-Hearth-Windows.zip` from the latest release.
+3. In File Explorer, right-click the ZIP and choose **Extract All…**.
+4. Open the extracted folder and double-click `Run Hearth.cmd` or `Project Hearth TV.exe`.
+5. On first launch, create a local username and password. In **Settings**, add your TMDB key and any TorBox, Debridio, or Stremio add-on connections you use.
 
-The app starts its own local host on an available loopback port and opens a dedicated Edge window when Edge is installed. No separate server or Python installation is required. If Windows SmartScreen shows an “unrecognized app” prompt, check that you downloaded the ZIP from this project's GitHub Releases page before choosing **More info → Run anyway**. The release is currently unsigned.
+The app starts its own local host on an available loopback port and opens its interface in a browser window. VLC opens in a separate player window when you choose Play. No separate server or Python installation is required. If Windows SmartScreen shows an “unrecognized app” prompt, check that you downloaded the ZIP from this project's GitHub Releases page before choosing **More info → Run anyway**. The release is currently unsigned.
 
 ## What the app does
 
@@ -17,7 +18,7 @@ The app starts its own local host on an available loopback port and opens a dedi
 - Looks up movie and episode streams via configured TorBox and Stremio add-ons.
 - Saves local libraries, settings, watch progress, and sign-in state on this PC.
 - Uses Windows DPAPI to protect saved provider keys and add-on URLs for the current Windows user.
-- Plays compatible streams in the embedded browser player; supported formats depend on Edge and the stream provider.
+- Opens local media and resolved streams in VLC, which supports a broad range of audio and video formats. Available streams still depend on your provider and may require internet access.
 
 Provider accounts and API keys are not bundled. You supply your own credentials in Settings. Your local app account and library are not uploaded or synced by Project Hearth.
 
@@ -37,7 +38,7 @@ The executable is written to `dist\Project Hearth TV.exe`. The spec bundles `ind
 ## Project files
 
 - `desktop_app.py` — desktop startup and local host lifecycle.
-- `index.html` — user interface and in-app player.
+- `index.html` — user interface and player controls.
 - `discovery.py` — TMDB search and Stremio add-on adapters.
 - `torbox.py` — TorBox API client and protected credential storage.
 - `server.py` — loopback app API and SQLite-backed local storage.

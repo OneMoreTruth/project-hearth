@@ -8,8 +8,10 @@ import mimetypes
 import os
 import re
 import secrets
+import shutil
 import sqlite3
 import sys
+import subprocess
 import threading
 import urllib.parse
 import uuid
@@ -176,6 +178,27 @@ def scan_library(library_id: int):
 
 def now(): return datetime.now(timezone.utc).isoformat()
 
+def vlc_executable() -> str | None:
+    """Find an installed VLC executable without relying on a browser codec."""
+    candidates = [os.environ.get("VLC_PATH", "")]
+    for env_name, default in (("PROGRAMFILES", r"C:\Program Files"), ("PROGRAMFILES(X86)", r"C:\Program Files (x86)")):
+        candidates.append(str(Path(os.environ.get(env_name, default)) / "VideoLAN" / "VLC" / "vlc.exe"))
+    candidates.append(shutil.which("vlc") or "")
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file(): return str(Path(candidate))
+    return None
+
+def open_in_vlc(url: str, title: str = "Project Hearth", allow_local_file: bool = False) -> None:
+    executable = vlc_executable()
+    if not executable:
+        raise RuntimeError("VLC is required for playback. Install VLC Media Player, then try Play again.")
+    parsed = urllib.parse.urlparse(url)
+    is_remote = parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    is_local = allow_local_file and parsed.scheme == "file"
+    if not (is_remote or is_local):
+        raise ValueError("VLC playback accepts HTTP or HTTPS streams and indexed library files only.")
+    subprocess.Popen([executable, "--no-video-title-show", "--meta-title", title[:200], url], close_fds=True)
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "Hearth/0.1"
     def log_message(self, *_): pass
@@ -300,6 +323,21 @@ class Handler(BaseHTTPRequestHandler):
                 app=tk.Tk(); app.withdraw(); app.attributes("-topmost",True); selected=filedialog.askdirectory(parent=app); app.destroy()
                 self.send_json({"path":selected or ""})
             except Exception as e: self.send_json({"error":f"Native folder picker unavailable: {e}"},501)
+            return
+        if path == "/api/player/open":
+            try:
+                media_id = data.get("media_id")
+                if media_id is not None:
+                    with db() as c: row = c.execute("SELECT path,title FROM media WHERE id=?", (int(media_id),)).fetchone()
+                    if not row: raise ValueError("This library item is no longer available.")
+                    media_path = Path(row["path"]).resolve(strict=True)
+                    with db() as c:
+                        if not c.execute("SELECT 1 FROM media WHERE path=?", (str(media_path),)).fetchone(): raise ValueError("This file is not in a scanned library.")
+                    open_in_vlc(media_path.as_uri(), row["title"], allow_local_file=True)
+                else:
+                    open_in_vlc(str(data.get("url", "")), str(data.get("title", "Project Hearth")))
+                self.send_json({"opened": True})
+            except Exception as e: self.send_json({"error": str(e)}, 400)
             return
         if path=="/api/libraries":
             p=data.get("path","").strip(); kind=data.get("kind"); name=data.get("name","").strip()
