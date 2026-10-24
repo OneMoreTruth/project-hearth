@@ -112,8 +112,52 @@ def tmdb_home() -> dict:
             })
         return items
     trending = [item for item in list_items("trending/all/week") if item["type"] in ("movie", "tv")]
-    new = list_items("movie/now_playing") + list_items("tv/on_the_air")
-    return {"suggested": trending, "new": new[:20]}
+    new_movies = list_items("movie/now_playing")
+    new_tv = list_items("tv/on_the_air")
+    return {
+        "suggested": trending,
+        "new": (new_movies + new_tv)[:24],
+        "popular_movies": list_items("movie/popular"),
+        "popular_tv": list_items("tv/popular"),
+        "top_movies": list_items("movie/top_rated"),
+        "top_tv": list_items("tv/top_rated"),
+        "new_movies": new_movies,
+        "new_tv": new_tv,
+    }
+
+
+def tmdb_catalog(kind: str, category: str = "popular", page: int = 1) -> dict:
+    """Fetch a paginated TMDB browse category for a full catalog page."""
+    kind = "tv" if kind.lower() in {"tv", "series", "show"} else "movie"
+    allowed = {"popular", "top_rated", "new", "trending"}
+    category = category if category in allowed else "popular"
+    paths = {
+        ("movie", "popular"): "movie/popular",
+        ("tv", "popular"): "tv/popular",
+        ("movie", "top_rated"): "movie/top_rated",
+        ("tv", "top_rated"): "tv/top_rated",
+        ("movie", "new"): "movie/now_playing",
+        ("tv", "new"): "tv/on_the_air",
+        ("movie", "trending"): "trending/movie/week",
+        ("tv", "trending"): "trending/tv/week",
+    }
+    params = urllib.parse.urlencode({"api_key": _tmdb_key(), "language": "en-GB", "region": "GB", "page": max(1, min(500, int(page)))})
+    result = _json(f"{TMDB}/{paths[(kind, category)]}?{params}")
+    return {"items": _normalize_items(result.get("results", []), kind), "page": result.get("page", 1), "total_pages": result.get("total_pages", 1)}
+
+
+def _normalize_items(entries: list[dict], default_kind: str) -> list[dict]:
+    items = []
+    for entry in entries:
+        kind = "tv" if entry.get("media_type") == "tv" else default_kind
+        items.append({
+            "id": str(entry.get("id", "")), "type": kind,
+            "title": entry.get("title") or entry.get("name") or "Untitled",
+            "year": (entry.get("release_date") or entry.get("first_air_date") or "")[:4],
+            "overview": entry.get("overview") or "", "poster": entry.get("poster_path"),
+            "backdrop": entry.get("backdrop_path"), "rating": entry.get("vote_average"),
+        })
+    return items
 
 
 def tmdb_tv_details(tmdb_id: str, season: int | None = None) -> dict:

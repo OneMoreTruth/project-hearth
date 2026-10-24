@@ -188,7 +188,7 @@ def vlc_executable() -> str | None:
         if candidate and Path(candidate).is_file(): return str(Path(candidate))
     return None
 
-def open_in_vlc(url: str, title: str = "Project Hearth", allow_local_file: bool = False, start_time: float = 0) -> None:
+def open_in_vlc(url: str, title: str = "Project Hearth", allow_local_file: bool = False, start_time: float = 0, progress_media_id: int | None = None):
     executable = vlc_executable()
     if not executable:
         raise RuntimeError("VLC is required for playback. Install VLC Media Player, then try Play again.")
@@ -199,8 +199,48 @@ def open_in_vlc(url: str, title: str = "Project Hearth", allow_local_file: bool 
         raise ValueError("VLC playback accepts HTTP or HTTPS streams and indexed library files only.")
     command = [executable, "--no-video-title-show", "--meta-title", title[:200]]
     if start_time > 5: command.append(f"--start-time={int(start_time)}")
+    rc_port = None
+    if progress_media_id is not None:
+        import socket
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0)); rc_port = probe.getsockname()[1]
+        command.extend(["--extraintf=rc", f"--rc-host=127.0.0.1:{rc_port}", "--no-one-instance"])
     command.append(url)
-    subprocess.Popen(command, close_fds=True)
+    process = subprocess.Popen(command, close_fds=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if progress_media_id is not None and rc_port is not None:
+        threading.Thread(target=track_vlc_progress, args=(process, rc_port, progress_media_id), daemon=True).start()
+    return process
+
+def track_vlc_progress(process, port: int, media_id: int) -> None:
+    """Persist VLC's real playback time while the local player is open."""
+    import socket, time, re
+    last_position = 0.0; last_duration = 0.0
+    deadline = time.monotonic() + 20
+    while process.poll() is None and time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1.5) as sock:
+                sock.settimeout(1.0)
+                try: sock.recv(4096)
+                except OSError: pass
+                while process.poll() is None:
+                    sock.sendall(b"get_time\nget_length\n")
+                    time.sleep(.35)
+                    try: raw = sock.recv(4096).decode("utf-8", "ignore")
+                    except OSError: raw = ""
+                    values = [int(x) for x in re.findall(r"(?:^|\n)(\d+)\s*\r?\n", raw)]
+                    if len(values) >= 2:
+                        last_position, last_duration = float(values[0]), float(values[1])
+                        with db() as conn:
+                            conn.execute("INSERT INTO progress(media_id,position,duration,updated_at) VALUES(?,?,?,?) ON CONFLICT(media_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at", (media_id,last_position,last_duration,now()))
+                    time.sleep(14)
+                break
+        except OSError:
+            time.sleep(.5)
+    if last_duration and last_position >= last_duration - 90:
+        last_position = 0.0
+    if last_duration:
+        with db() as conn:
+            conn.execute("INSERT INTO progress(media_id,position,duration,updated_at) VALUES(?,?,?,?) ON CONFLICT(media_id) DO UPDATE SET position=excluded.position,duration=excluded.duration,updated_at=excluded.updated_at", (media_id,last_position,last_duration,now()))
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "Hearth/0.1"
@@ -231,6 +271,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(discovery.settings()); return
             if path == "/api/discovery/home":
                 try: self.send_json(discovery.tmdb_home())
+                except Exception as e: self.send_json({"error": str(e)}, 400)
+                return
+            if path == "/api/discovery/catalog":
+                query = urllib.parse.parse_qs(u.query)
+                try: self.send_json(discovery.tmdb_catalog(query.get("type", ["movie"])[0], query.get("category", ["popular"])[0], int(query.get("page", ["1"])[0])))
                 except Exception as e: self.send_json({"error": str(e)}, 400)
                 return
             if path == "/api/discovery/search":
@@ -342,7 +387,7 @@ class Handler(BaseHTTPRequestHandler):
                         if not c.execute("SELECT 1 FROM media WHERE path=?", (str(media_path),)).fetchone(): raise ValueError("This file is not in a scanned library.")
                     resume_at = float(row["position"] or 0)
                     if row["duration"] and resume_at >= float(row["duration"]) - 90: resume_at = 0
-                    open_in_vlc(media_path.as_uri(), row["title"], allow_local_file=True, start_time=resume_at)
+                    open_in_vlc(media_path.as_uri(), row["title"], allow_local_file=True, start_time=resume_at, progress_media_id=int(media_id))
                     with db() as c:
                         c.execute("INSERT INTO progress(media_id,position,duration,updated_at) VALUES(?,?,?,?) ON CONFLICT(media_id) DO UPDATE SET updated_at=excluded.updated_at", (int(media_id),resume_at,row["duration"],now()))
                 else:
